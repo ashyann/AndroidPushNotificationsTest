@@ -1,39 +1,149 @@
 package practise.demo.test.ar.pushnotifydemo;
 
-import android.support.v7.app.ActionBarActivity;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.Toast;
+
+import com.google.android.gms.gcm.GoogleCloudMessaging;
+
+import java.io.IOException;
+import java.util.ArrayList;
+
+import retrofit.Callback;
+import retrofit.RetrofitError;
+import retrofit.client.Response;
 
 
-public class MainActivity extends ActionBarActivity {
+public class MainActivity extends Activity {
+    //SENDER_ID below: Please create your own senderid/projectnumber using google apis console instead of using mine :)
+    private String SENDER_ID = "1004485364887";
+    private static final String TAG = "PushNotificationDemo";
+    private GoogleCloudMessaging gcm;
+    private Context context;
+    private String registrationId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        context = getApplicationContext();
+        gcm = GoogleCloudMessaging.getInstance(this);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        new RegisterInBackgroundTask(context).execute();
+    }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        // Inflate the menu; this adds items to the action bar if it is present.
         getMenuInflater().inflate(R.menu.menu_main, menu);
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        // Handle action bar item clicks here. The action bar will
-        // automatically handle clicks on the Home/Up button, so long
-        // as you specify a parent activity in AndroidManifest.xml.
         int id = item.getItemId();
-
-        //noinspection SimplifiableIfStatement
         if (id == R.id.action_settings) {
+            Intent settingsIntent = new Intent(this, SettingsActivity.class);
+            startActivity(settingsIntent);
             return true;
         }
-
         return super.onOptionsItemSelected(item);
+    }
+
+    private class RegisterInBackgroundTask extends AsyncTask<String,String,String> {
+        private Context context;
+
+        public RegisterInBackgroundTask(Context context) {
+            this.context = context;
+        }
+
+        @Override
+        protected String doInBackground(String... arg0) {
+            String message = "";
+            try {
+                if (gcm == null) {
+                    gcm = GoogleCloudMessaging.getInstance(context);
+                }
+                registrationId = gcm.register(SENDER_ID);
+                message = "Device successfully registered with GCM, notification token=" + registrationId;
+                Log.d(TAG, message);
+                sendRegistrationIdToBackend(registrationId);
+
+            } catch (IOException ex) {
+                message = "GCM registration error :" + ex.getMessage();
+            }
+            return message;
+        }
+
+        @Override
+        protected void onPostExecute(String msg) {
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
+        }
+
+        private void sendRegistrationIdToBackend(String registrationId) {
+
+            String backendBaseUrl = readStringFromSharedPreferences(SettingsActivity.SETTINGS_KEY_BACKEND_URL);
+            if (backendBaseUrl == null || backendBaseUrl == "")
+            {
+                return;//no backend base url set in settings, do not try to call backend
+            }
+
+            PushNotificationClient client = new PushNotificationClient(backendBaseUrl);
+            Device device = createDevice(registrationId);
+            client.registerDevice(device, new Callback<Device>() {
+                @Override
+                public void success(Device device, Response response) {
+                    writeStringToSharedPreferences(SettingsActivity.SETTINGS_KEY_DEVICEGUID, device.DeviceGuid);
+                    Toast.makeText(context, "Device successfully registered with backend, DeviceGUID=" + device.DeviceGuid, Toast.LENGTH_LONG).show();
+                }
+
+                @Override
+                public void failure(RetrofitError retrofitError) {
+                    Toast.makeText(context, "Backend registration error:" + retrofitError.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            });
+
+            Log.i(TAG, registrationId);
+        }
+
+        private Device createDevice(String registrationId) {
+            Device device = new Device();
+            device.Platform = "Android";
+            device.Token = registrationId;
+            device.UserName = readStringFromSharedPreferences(SettingsActivity.SETTINGS_KEY_USERNAME);
+            device.DeviceGuid = readStringFromSharedPreferences(SettingsActivity.SETTINGS_KEY_DEVICEGUID);
+            //todo set device.PlatformDescription based on Android version
+            device.SubscriptionCategories = new ArrayList<String>();
+            device.SubscriptionCategories.add("horse");
+            device.SubscriptionCategories.add("dog");
+            device.SubscriptionCategories.add("hippo");
+            return device;
+        }
+
+        private String readStringFromSharedPreferences(String preferenceKey) {
+            return PreferenceManager
+                    .getDefaultSharedPreferences(context)
+                    .getString(preferenceKey, "");
+        }
+
+        private void writeStringToSharedPreferences(String preferenceKey, String value) {
+            SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
+            SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putString(preferenceKey, value);
+            editor.commit();
+        }
     }
 }
